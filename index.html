@@ -25,7 +25,7 @@
 
         /* 2. CONTENEDOR DEL MAPA (DERECHA) */
         #map {
-            flex-grow: 1; /* Ocupa el resto del espacio */
+            flex-grow: 1;
             height: 100%;
         }
 
@@ -36,7 +36,7 @@
         select { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; background: white; }
         
         .stats {
-            margin-top: auto; /* Empuja esto al final */
+            margin-top: auto;
             background: #e9ecef;
             padding: 10px;
             border-radius: 5px;
@@ -44,12 +44,12 @@
             color: #495057;
         }
 
-        /* ESTILO DEL POPUP (CUADRO FLOTANTE AL CLICK) */
-        .leaflet-popup-content-wrapper { border-radius: 0px; padding: 0; }
+        /* ESTILO DEL POPUP */
+        .leaflet-popup-content-wrapper { border-radius: 4px; padding: 0; overflow: hidden; }
         .leaflet-popup-content { margin: 0; width: 280px !important; }
         
         .popup-header {
-            background-color: #007bff;
+            background-color: #d35400; /* Naranja quemado */
             color: white;
             padding: 10px;
             font-weight: bold;
@@ -60,14 +60,13 @@
         .tabla-datos td { border-bottom: 1px solid #eee; padding: 4px 0; }
         .tabla-datos td:first-child { color: #666; font-weight: 500; }
         .tabla-datos td:last-child { text-align: right; font-weight: bold; }
-
     </style>
 </head>
 <body>
 
     <div id="sidebar">
         <h2>Panel de Control</h2>
-        <p style="font-size: 12px; color: #666;">Selecciona filtros para visualizar los puntos de monitoreo.</p>
+        <p style="font-size: 12px; color: #666;">Visualización de puntos en Zona 17S.</p>
 
         <div class="control-group">
             <label>Tipo de Fuente:</label>
@@ -100,7 +99,7 @@
         const urlCSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZoRkV36w1tJ_wWvgMIuUda7PHYPLYGo3eRFkbym7UdARNyL8nw4JIphGplupwiipyxBFvLlpU6Mtb/pub?gid=0&single=true&output=csv";
 
         // Configuración inicial del mapa
-        var map = L.map('map').setView([-9.5, -77.5], 6); // Vista general inicial
+        var map = L.map('map').setView([-9.5, -77.5], 6);
         
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '© OpenStreetMap'
@@ -109,10 +108,10 @@
         var layerGroup = L.layerGroup().addTo(map);
         var datos = [];
 
-        // Definir proyecciones UTM (Zonas 17S, 18S, 19S)
-        proj4.defs("EPSG:32717","+proj=utm +zone=17 +south +datum=WGS84 +units=m +no_defs");
-        proj4.defs("EPSG:32718","+proj=utm +zone=18 +south +datum=WGS84 +units=m +no_defs");
-        proj4.defs("EPSG:32719","+proj=utm +zone=19 +south +datum=WGS84 +units=m +no_defs");
+        // DEFINICIÓN FIJA: ZONA 17 SUR (EPSG:32717)
+        // Ya no adivinamos la zona, usamos esta fórmula matemática fija.
+        const UTM_ZONE_17S = "+proj=utm +zone=17 +south +datum=WGS84 +units=m +no_defs";
+        proj4.defs("EPSG:32717", UTM_ZONE_17S);
 
         // Cargar datos
         Papa.parse(urlCSV, {
@@ -124,29 +123,23 @@
             }
         });
 
-        // --- FUNCIÓN MEJORADA DE COORDENADAS ---
-        function convertirCoordenadas(este, norte, zona) {
-            if (!este || !norte || !zona) return null;
+        // --- FUNCIÓN COORDENADAS (SOLO ZONA 17S) ---
+        function convertirCoordenadas(este, norte) {
+            if (!este || !norte) return null;
 
-            // 1. Limpieza de números (Cambiar coma por punto si existe)
+            // Limpieza de números (Cambiar coma por punto si existe)
             let e = parseFloat(este.toString().replace(',', '.'));
             let n = parseFloat(norte.toString().replace(',', '.'));
             
-            // 2. Limpieza de Zona (Extraer solo números)
-            // Esto convierte "18", "Zona 18", "18S" -> "18"
-            let zonaNum = zona.toString().replace(/\D/g, ''); 
-            
-            // Validación de seguridad (Perú suele ser 17, 18, 19)
-            if (!['17','18','19'].includes(zonaNum)) {
-                zonaNum = '18'; // Valor por defecto si falla
-            }
-
             try {
-                let codigoOrigen = "EPSG:327" + zonaNum;
-                let p = proj4(codigoOrigen, 'EPSG:4326', [e, n]);
-                // Validar que no haya salido NaN (error matemático)
+                // Convertimos SIEMPRE usando Zona 17 Sur
+                let p = proj4("EPSG:32717", 'EPSG:4326', [e, n]);
+                
+                // Validar que no sea un error matemático
                 if (isNaN(p[0]) || isNaN(p[1])) return null;
-                return [p[1], p[0]]; // Retorna [Lat, Lon]
+                
+                // Retorna [Lat, Lon]
+                return [p[1], p[0]]; 
             } catch (error) {
                 return null;
             }
@@ -158,86 +151,4 @@
             let cuencaSel = document.getElementById('filtroCuenca').value;
             let contador = 0;
             
-            // Variable para calcular el "Zoom Automático"
-            var bounds = L.latLngBounds(); 
-
-            datos.forEach(d => {
-                // Filtros
-                if (tipoSel !== 'todos' && d.TIPO_RH !== tipoSel) return;
-                if (cuencaSel !== 'todos' && d.UNIDAD_HID !== cuencaSel) return;
-
-                let latlng = convertirCoordenadas(d.ESTE, d.NORTE, d.ZONA);
-                
-                if (latlng) {
-                    contador++;
-                    
-                    // Diseño del Marcador (Punto más visible)
-                    let marker = L.circleMarker(latlng, {
-                        radius: 8,
-                        fillColor: "#ff7800", // Color Naranja fuerte
-                        color: "#000",
-                        weight: 1,
-                        opacity: 1,
-                        fillOpacity: 0.8
-                    });
-
-                    // Diseño del Popup (Cuadro Flotante)
-                    let contenidoPopup = `
-                        <div class="popup-header">
-                            ${d.CODIGO_FI || 'Punto'}
-                        </div>
-                        <div class="popup-body">
-                            <div style="margin-bottom:8px;">${d.DESCRIPCION || ''}</div>
-                            <table class="tabla-datos">
-                                <tr><td>Zona UTM</td><td>${d.ZONA}</td></tr>
-                                <tr><td>Arsénico (2023)</td><td>${d.As_ppm_2023i || '-'}</td></tr>
-                                <tr><td>Cadmio (2023)</td><td>${d.Cd_ppm_2023i || '-'}</td></tr>
-                                <tr><td>Plomo (2023)</td><td>${d.Pb_ppm_2023i || '-'}</td></tr>
-                                <tr><td>pH (2014)</td><td>${d.CLASIFICACAs_ppm_2014i || '-'}</td></tr>
-                            </table>
-                        </div>
-                    `;
-
-                    marker.bindPopup(contenidoPopup);
-                    marker.bindTooltip(d.CODIGO_FI);
-                    
-                    layerGroup.addLayer(marker);
-                    bounds.extend(latlng); // Agregamos coord para el auto-zoom
-                }
-            });
-
-            document.getElementById('numPuntos').innerText = contador;
-
-            // --- AUTO ZOOM ---
-            // Si hay puntos visibles, ajustamos la cámara para verlos todos
-            if (contador > 0) {
-                map.fitBounds(bounds, { padding: [50, 50] });
-            }
-        }
-
-        function llenarSelectores() {
-            let tipos = new Set();
-            let cuencas = new Set();
-            datos.forEach(d => {
-                if(d.TIPO_RH) tipos.add(d.TIPO_RH);
-                if(d.UNIDAD_HID) cuencas.add(d.UNIDAD_HID);
-            });
-            
-            // Llenar selects
-            let s1 = document.getElementById('filtroTipo');
-            s1.innerHTML = '<option value="todos">Todos</option>';
-            tipos.forEach(x => s1.innerHTML += `<option value="${x}">${x}</option>`);
-
-            let s2 = document.getElementById('filtroCuenca');
-            s2.innerHTML = '<option value="todos">Todas</option>';
-            cuencas.forEach(x => s2.innerHTML += `<option value="${x}">${x}</option>`);
-        }
-
-        function aplicarFiltros() {
-            pintarPuntos();
-        }
-    </script>
-</body>
-</html>
-
-
+            // Variable para calcular el Auto-Zoom

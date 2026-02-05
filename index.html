@@ -152,3 +152,83 @@
             let contador = 0;
             
             // Variable para calcular el Auto-Zoom
+            var bounds = L.latLngBounds(); 
+
+            datos.forEach(d => {
+                // Filtros
+                if (tipoSel !== 'todos' && d.TIPO_RH !== tipoSel) return;
+                if (cuencaSel !== 'todos' && d.UNIDAD_HID !== cuencaSel) return;
+
+                // CONVERSIÓN: Solo pasamos Este y Norte (la Zona ya está fija en 17S)
+                let latlng = convertirCoordenadas(d.ESTE, d.NORTE);
+                
+                if (latlng) {
+                    contador++;
+                    
+                    // Marcador Naranja
+                    let marker = L.circleMarker(latlng, {
+                        radius: 7,
+                        fillColor: "#e67e22", 
+                        color: "#fff",
+                        weight: 1,
+                        opacity: 1,
+                        fillOpacity: 0.9
+                    });
+
+                    // Popup
+                    let contenidoPopup = `
+                        <div class="popup-header">
+                            ${d.CODIGO_FI || 'Punto'}
+                        </div>
+                        <div class="popup-body">
+                            <div style="margin-bottom:8px;">${d.DESCRIPCION || ''}</div>
+                            <table class="tabla-datos">
+                                <tr><td>Zona UTM</td><td>17 Sur (Fija)</td></tr>
+                                <tr><td>Este</td><td>${d.ESTE}</td></tr>
+                                <tr><td>Norte</td><td>${d.NORTE}</td></tr>
+                                <tr><td>Arsénico (2023)</td><td>${d.As_ppm_2023i || '-'}</td></tr>
+                                <tr><td>Cadmio (2023)</td><td>${d.Cd_ppm_2023i || '-'}</td></tr>
+                                <tr><td>Plomo (2023)</td><td>${d.Pb_ppm_2023i || '-'}</td></tr>
+                            </table>
+                        </div>
+                    `;
+
+                    marker.bindPopup(contenidoPopup);
+                    marker.bindTooltip(d.CODIGO_FI);
+                    
+                    layerGroup.addLayer(marker);
+                    bounds.extend(latlng);
+                }
+            });
+
+            document.getElementById('numPuntos').innerText = contador;
+
+            // Auto Zoom si hay puntos
+            if (contador > 0) {
+                map.fitBounds(bounds, { padding: [50, 50] });
+            }
+        }
+
+        function llenarSelectores() {
+            let tipos = new Set();
+            let cuencas = new Set();
+            datos.forEach(d => {
+                if(d.TIPO_RH) tipos.add(d.TIPO_RH);
+                if(d.UNIDAD_HID) cuencas.add(d.UNIDAD_HID);
+            });
+            
+            let s1 = document.getElementById('filtroTipo');
+            s1.innerHTML = '<option value="todos">Todos</option>';
+            tipos.forEach(x => s1.innerHTML += `<option value="${x}">${x}</option>`);
+
+            let s2 = document.getElementById('filtroCuenca');
+            s2.innerHTML = '<option value="todos">Todas</option>';
+            cuencas.forEach(x => s2.innerHTML += `<option value="${x}">${x}</option>`);
+        }
+
+        function aplicarFiltros() {
+            pintarPuntos();
+        }
+    </script>
+</body>
+</html>

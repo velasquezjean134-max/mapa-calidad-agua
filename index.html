@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visor de Calidad de Agua</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; }
+        
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; z-index: 1; }
+
+        /* Panel de Control Flotante */
+        #panel-control {
+            position: absolute; top: 20px; right: 20px; z-index: 1000;
+            background: white; padding: 15px; border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            width: 250px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        
+        h3 { margin: 0 0 10px 0; font-size: 16px; color: #333; }
+        label { font-size: 12px; font-weight: bold; color: #555; }
+        
+        select { 
+            width: 100%; padding: 8px; margin-bottom: 10px;
+            border: 1px solid #ccc; border-radius: 4px; 
+        }
+
+        .contador { font-size: 11px; color: #777; text-align: right; }
+
+        /* Estilo de la tabla en el Popup */
+        .tabla-datos { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 5px; }
+        .tabla-datos th { background: #f4f4f4; text-align: left; padding: 4px; border-bottom: 1px solid #ddd; }
+        .tabla-datos td { padding: 3px; border-bottom: 1px solid #eee; }
+        
+        /* Colores para alertas visuales en la tabla */
+        .valor-alto { color: red; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div id="panel-control">
+        <h3>Monitoreo Ambiental</h3>
+        
+        <label>Filtrar por Tipo de Fuente:</label>
+        <select id="filtroTipo" onchange="aplicarFiltros()">
+            <option value="todos">Cargando...</option>
+        </select>
+
+        <label>Filtrar por Unidad Hidrográfica:</label>
+        <select id="filtroCuenca" onchange="aplicarFiltros()">
+            <option value="todos">Todas</option>
+        </select>
+
+        <div class="contador">Puntos mostrados: <span id="numPuntos">0</span></div>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+
+    <script>
+        // 1. TU ENLACE CONFIGURADO
+        const urlCSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZoRkV36w1tJ_wWvgMIuUda7PHYPLYGo3eRFkbym7UdARNyL8nw4JIphGplupwiipyxBFvLlpU6Mtb/pub?gid=0&single=true&output=csv";
+
+        // Configuración inicial del mapa
+        var map = L.map('map').setView([-9.5, -77.5], 8); // Centrado aprox en Ancash/Perú
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        var layerGroup = L.layerGroup().addTo(map);
+        var datos = [];
+
+        // Definir proyecciones UTM (Zonas 17S, 18S, 19S)
+        proj4.defs("EPSG:32717","+proj=utm +zone=17 +south +datum=WGS84 +units=m +no_defs");
+        proj4.defs("EPSG:32718","+proj=utm +zone=18 +south +datum=WGS84 +units=m +no_defs");
+        proj4.defs("EPSG:32719","+proj=utm +zone=19 +south +datum=WGS84 +units=m +no_defs");
+
+        // Cargar datos al iniciar
+        Papa.parse(urlCSV, {
+            download: true, 
+            header: true,
+            skipEmptyLines: true,
+            complete: function(results) {
+                datos = results.data;
+                console.log("Datos cargados:", datos.length); // Para depuración
+                llenarSelectores();
+                pintarPuntos();
+            },
+            error: function(e) { alert("Error cargando datos. Verifica tu conexión."); }
+        });
+
+        // Función para convertir UTM a Lat/Lon
+        function convertirCoordenadas(este, norte, zonaTexto) {
+            if (!este || !norte) return null;
+            
+            // Extraer solo el número de la zona (ej: "18S" -> "18")
+            let zonaNum = zonaTexto ? zonaTexto.toString().replace(/\D/g,'') : '18';
+            // Si no hay zona, asumir 18 por defecto
+            if(zonaNum === "") zonaNum = "18";
+
+            let codigoOrigen = "EPSG:327" + zonaNum; 
+
+            try {
+                // Proj4 devuelve [lon, lat], Leaflet necesita [lat, lon]
+                let p = proj4(codigoOrigen, 'EPSG:4326', [parseFloat(este), parseFloat(norte)]);
+                return [p[1], p[0]];
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function pintarPuntos() {
+            layerGroup.clearLayers();
+            
+            let tipoSel = document.getElementById('filtroTipo').value;
+            let cuencaSel = document.getElementById('filtroCuenca').value;
+            let contador = 0;
+
+            datos.forEach(d => {
+                // Validar filtros
+                if (tipoSel !== 'todos' && d.TIPO_RH !== tipoSel) return;
+                if (cuencaSel !== 'todos' && d.UNIDAD_HID !== cuencaSel) return;
+
+                // Validar coordenadas
+                let latlng = convertirCoordenadas(d.ESTE, d.NORTE, d.ZONA);
+                
+                if (latlng) {
+                    contador++;
+                    let marker = L.marker(latlng);
+
+                    // Contenido del Popup (Click)
+                    let popupContent = `
+                        <div style="font-weight:bold; color:#0056b3; margin-bottom:4px;">${d.CODIGO_FI || 'Sin Código'}</div>
+                        <div style="font-size:11px; margin-bottom:8px;">${d.DESCRIPCION || ''}</div>
+                        
+                        <b>Resultados 2023 (ppm):</b>
+                        <table class="tabla-datos">
+                            <tr><td>Arsénico (As)</td><td>${d.As_ppm_2023i || '-'}</td></tr>
+                            <tr><td>Cadmio (Cd)</td><td>${d.Cd_ppm_2023i || '-'}</td></tr>
+                            <tr><td>Mercurio (Hg)</td><td>${d.Hg_ppm_2023i || '-'}</td></tr>
+                            <tr><td>Plomo (Pb)</td><td>${d.Pb_ppm_2023i || '-'}</td></tr>
+                            <tr><td>Aluminio (Al)</td><td>${d.Al_ppm_2023i || '-'}</td></tr>
+                            <tr><td>Hierro (Fe)</td><td>${d.Fe_ppm_2023i || '-'}</td></tr>
+                            <tr><td>Manganeso (Mn)</td><td>${d.Mn_ppm_2023i || '-'}</td></tr>
+                            <tr><td>Zinc (Zn)</td><td>${d.Zn_ppm_2023i || '-'}</td></tr>
+                        </table>
+                        <div style="font-size:10px; color:#666; margin-top:5px;">
+                            ${d.DEPARTAMENT} - ${d.PROVINCIA}
+                        </div>
+                    `;
+
+                    marker.bindPopup(popupContent);
+                    
+                    // Tooltip (Hover)
+                    marker.bindTooltip(`${d.CODIGO_FI}: ${d.DESCRIPCION}`, {direction: 'top'});
+
+                    layerGroup.addLayer(marker);
+                }
+            });
+
+            document.getElementById('numPuntos').innerText = contador;
+        }
+
+        function llenarSelectores() {
+            let tipos = new Set();
+            let cuencas = new Set();
+
+            datos.forEach(d => {
+                if(d.TIPO_RH) tipos.add(d.TIPO_RH);
+                if(d.UNIDAD_HID) cuencas.add(d.UNIDAD_HID);
+            });
+
+            // Llenar Filtro Tipo
+            let selTipo = document.getElementById('filtroTipo');
+            selTipo.innerHTML = '<option value="todos">Todos</option>';
+            tipos.forEach(t => {
+                let opt = document.createElement('option');
+                opt.value = t; opt.innerText = t;
+                selTipo.appendChild(opt);
+            });
+
+            // Llenar Filtro Cuenca (Unidad Hidrográfica)
+            let selCuenca = document.getElementById('filtroCuenca');
+            selCuenca.innerHTML = '<option value="todos">Todas</option>';
+            cuencas.forEach(c => {
+                let opt = document.createElement('option');
+                opt.value = c; opt.innerText = c;
+                selCuenca.appendChild(opt);
+            });
+        }
+
+        function aplicarFiltros() {
+            pintarPuntos();
+        }
+
+    </script>
+</body>
+</html>

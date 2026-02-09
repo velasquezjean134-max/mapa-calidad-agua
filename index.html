@@ -8,12 +8,13 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     
     <style>
-        body { margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; }
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Helvetica, Arial, sans-serif; display: flex; height: 100vh; }
         
         /* Panel Lateral */
         #sidebar {
-            width: 300px; background-color: #f8f9fa; border-right: 1px solid #ddd;
+            width: 320px; background-color: #f8f9fa; border-right: 1px solid #ddd;
             display: flex; flex-direction: column; padding: 20px; box-shadow: 2px 0 5px rgba(0,0,0,0.1); z-index: 1000;
+            overflow-y: auto;
         }
 
         /* Mapa */
@@ -25,7 +26,28 @@
         select { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
         
         .info-box { margin-top: auto; padding: 10px; background: #e3f2fd; border-radius: 5px; font-size: 0.9rem; color: #0d47a1; }
+        
+        /* Estilo Popup */
+        .custom-popup .leaflet-popup-content-wrapper { border-radius: 4px; }
     </style>
+
+    <script>
+        // Esto arregla el error "Can't find variable: requestIdleCallback" en Safari antiguo
+        window.requestIdleCallback = window.requestIdleCallback || function(cb) {
+            var start = Date.now();
+            return setTimeout(function() {
+                cb({
+                    didTimeout: false,
+                    timeRemaining: function() {
+                        return Math.max(0, 50 - (Date.now() - start));
+                    }
+                });
+            }, 1);
+        };
+        window.cancelIdleCallback = window.cancelIdleCallback || function(id) {
+            clearTimeout(id);
+        };
+    </script>
 </head>
 <body>
 
@@ -33,7 +55,7 @@
         <h2>Panel de Control</h2>
 
         <div class="control-group">
-            <label>🌊 Seleccionar Cuenca:</label>
+            <label>🌊 Seleccionar Cuenca (Zona):</label>
             <select id="selectorCuenca" onchange="resaltarCuenca()">
                 <option value="">-- Ver Todo --</option>
             </select>
@@ -45,9 +67,18 @@
                 <option value="todos">Cargando puntos...</option>
             </select>
         </div>
+        
+        <div class="control-group">
+             <label>💧 Unidad Hidrográfica:</label>
+            <select id="filtroCuenca" onchange="pintarPuntos()">
+                <option value="todos">Todas</option>
+            </select>
+        </div>
 
         <div class="info-box">
             <div id="datosCuenca">Selecciona una cuenca para ver sus detalles.</div>
+            <br>
+            <small>Total puntos visibles: <span id="contadorPuntos">0</span></small>
         </div>
     </div>
 
@@ -58,11 +89,12 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
 
     <script>
-        // --- 1. TUS ARCHIVOS ---
-        // Pega aquí tu enlace CSV de los PUNTOS (Google Sheets)
+        // --- 1. TUS ARCHIVOS (CONFIGURACIÓN) ---
+        
+        // PEGA AQUÍ TU ENLACE CSV DE GOOGLE SHEETS
         const urlCSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZoRkV36w1tJ_wWvgMIuUda7PHYPLYGo3eRFkbym7UdARNyL8nw4JIphGplupwiipyxBFvLlpU6Mtb/pub?gid=0&single=true&output=csv"; 
         
-        // Asegúrate de que el archivo del mapa se llame ASÍ en GitHub:
+        // El nombre EXACTO de tu archivo en GitHub
         const archivoGeoJSON = "cuencas.geojson"; 
 
         // Configuración del Mapa
@@ -82,34 +114,39 @@
 
         // 1. Cargar Mapa de Cuencas (GeoJSON)
         fetch(archivoGeoJSON)
-            .then(res => res.json())
+            .then(res => {
+                if (!res.ok) throw new Error("Error cargando GeoJSON");
+                return res.json();
+            })
             .then(data => {
                 datosGeoJSON = data;
+                
                 // Configurar estilo base
                 layerCuencas = L.geoJSON(data, {
                     style: { color: "#555", weight: 1, fillOpacity: 0.1 },
                     onEachFeature: function(feature, layer) {
-                        // AQUÍ USAMOS TUS COLUMNAS DEL CSV (NOMBRE, CODIGO, AREA)
-                        let nombre = feature.properties.NOMBRE || "Cuenca";
-                        let area = feature.properties.AREA_KM2 || 0;
-                        let codigo = feature.properties.CODIGO || "-";
+                        // Intentamos obtener el nombre de varias formas posibles
+                        let props = feature.properties;
+                        let nombre = props.NOMBRE || props.Name || props.NOMB_UH_N1 || "Cuenca";
+                        let area = props.AREA_KM2 || 0;
                         
-                        layer.bindPopup(`<b>${nombre}</b><br>Código: ${codigo}<br>Área: ${area} km²`);
+                        layer.bindPopup(`<b>${nombre}</b><br>Área: ${area} km²`);
                     }
                 }).addTo(map);
                 
                 llenarSelectorCuencas();
             })
-            .catch(err => console.error("Error cargando cuencas.geojson:", err));
+            .catch(err => console.error("Error GeoJSON:", err));
 
         // 2. Cargar Puntos (CSV Google Sheets)
         Papa.parse(urlCSV, {
             download: true, header: true, skipEmptyLines: true,
             complete: function(results) {
                 datosPuntos = results.data;
-                llenarSelectorPuntos();
+                llenarSelectoresPuntos(); // Llenar filtros
                 pintarPuntos();
-            }
+            },
+            error: function(err) { console.error("Error CSV:", err); }
         });
 
         // --- FUNCIONES ---
@@ -119,10 +156,12 @@
             
             layerCuencas.eachLayer(layer => {
                 let props = layer.feature.properties;
+                let nombreLayer = props.NOMBRE || props.Name || "";
+                
                 // Restaurar estilo original
                 layer.setStyle({ color: "#555", weight: 1, fillOpacity: 0.1, fillColor: "blue" });
                 
-                if (seleccion === props.NOMBRE) {
+                if (seleccion === nombreLayer) {
                     // Resaltar selección
                     layer.setStyle({ color: "#d32f2f", weight: 3, fillOpacity: 0.4, fillColor: "#ffCDD2" });
                     layer.openPopup();
@@ -130,9 +169,9 @@
                     
                     // Mostrar datos en el panel
                     document.getElementById('datosCuenca').innerHTML = 
-                        `<b>${props.NOMBRE}</b><br>
-                         Área: ${props.AREA_KM2} km²<br>
-                         Código ANA: ${props.CODIGO}`;
+                        `<b>${nombreLayer}</b><br>
+                         Área: ${props.AREA_KM2 || '-'} km²<br>
+                         Cód: ${props.CODIGO || '-'}`;
                 }
             });
         }
@@ -141,8 +180,12 @@
             let sel = document.getElementById('selectorCuenca');
             if (!datosGeoJSON) return;
             
-            // Ordenar alfabéticamente
-            let nombres = datosGeoJSON.features.map(f => f.properties.NOMBRE).sort();
+            let nombres = [];
+            datosGeoJSON.features.forEach(f => {
+                let n = f.properties.NOMBRE || f.properties.Name;
+                if(n) nombres.push(n);
+            });
+            nombres.sort(); // Ordenar A-Z
             
             nombres.forEach(n => {
                 let opt = document.createElement('option');
@@ -152,7 +195,6 @@
             });
         }
 
-        // Función auxiliar para convertir coordenadas
         function convertirCoord(este, norte) {
             if (!este || !norte) return null;
             let e = parseFloat(este.toString().replace(',', '.'));
@@ -166,27 +208,58 @@
 
         function pintarPuntos() {
             layerPuntos.clearLayers();
-            let filtro = document.getElementById('filtroTipo').value;
+            let filtroTipo = document.getElementById('filtroTipo').value;
+            let filtroCuenca = document.getElementById('filtroCuenca').value;
+            let contador = 0;
             
             datosPuntos.forEach(d => {
-                if (filtro !== 'todos' && d.TIPO_RH !== filtro) return;
+                // Filtros
+                if (filtroTipo !== 'todos' && d.TIPO_RH !== filtroTipo) return;
+                if (filtroCuenca !== 'todos' && d.UNIDAD_HID !== filtroCuenca) return;
                 
                 let latlng = convertirCoord(d.ESTE, d.NORTE);
+                
                 if (latlng) {
-                    let marker = L.circleMarker(latlng, { radius: 6, color: 'white', fillColor: '#0277bd', fillOpacity: 1, weight: 1 });
-                    marker.bindPopup(`<b>${d.CODIGO_FI}</b><br>${d.DESCRIPCION}`);
+                    contador++;
+                    let marker = L.circleMarker(latlng, { radius: 6, color: 'white', fillColor: '#e65100', fillOpacity: 0.9, weight: 1 });
+                    
+                    let contenido = `<b>${d.CODIGO_FI}</b><br>
+                                     ${d.DESCRIPCION}<br>
+                                     <hr style="margin:5px 0;">
+                                     As (2023): ${d.As_ppm_2023i || '-'}`;
+                                     
+                    marker.bindPopup(contenido);
                     layerPuntos.addLayer(marker);
                 }
             });
+            
+            document.getElementById('contadorPuntos').innerText = contador;
         }
 
-        function llenarSelectorPuntos() {
-            let sel = document.getElementById('filtroTipo');
-            let tipos = [...new Set(datosPuntos.map(d => d.TIPO_RH))].filter(Boolean);
+        function llenarSelectoresPuntos() {
+            let selTipo = document.getElementById('filtroTipo');
+            let selCuenca = document.getElementById('filtroCuenca');
+            
+            let tipos = new Set();
+            let cuencas = new Set();
+            
+            datosPuntos.forEach(d => {
+                if(d.TIPO_RH) tipos.add(d.TIPO_RH);
+                if(d.UNIDAD_HID) cuencas.add(d.UNIDAD_HID);
+            });
+            
+            // Llenar Tipo
             tipos.forEach(t => {
                 let opt = document.createElement('option');
                 opt.value = t; opt.innerText = t;
-                sel.appendChild(opt);
+                selTipo.appendChild(opt);
+            });
+
+            // Llenar Cuenca (Unidad Hidrográfica)
+            cuencas.forEach(c => {
+                let opt = document.createElement('option');
+                opt.value = c; opt.innerText = c;
+                selCuenca.appendChild(opt);
             });
         }
     </script>

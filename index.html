@@ -9,40 +9,28 @@
     
     <style>
         body { margin: 0; padding: 0; font-family: 'Segoe UI', Helvetica, Arial, sans-serif; display: flex; height: 100vh; }
-        
-        #sidebar {
-            width: 320px; background-color: #f8f9fa; border-right: 1px solid #ddd;
-            display: flex; flex-direction: column; padding: 20px; box-shadow: 2px 0 5px rgba(0,0,0,0.1); z-index: 1000;
-            overflow-y: auto;
-        }
-
+        #sidebar { width: 320px; background-color: #f8f9fa; border-right: 1px solid #ddd; display: flex; flex-direction: column; padding: 20px; z-index: 1000; overflow-y: auto; }
         #map { flex-grow: 1; height: 100%; }
-
-        h2 { margin-top: 0; color: #2c3e50; font-size: 1.2rem; }
         .control-group { margin-bottom: 20px; background: white; padding: 15px; border-radius: 8px; border: 1px solid #eee; }
         label { font-weight: bold; font-size: 0.9rem; color: #555; display: block; margin-bottom: 8px; }
         select { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
-        
         .info-box { margin-top: auto; padding: 10px; background: #e3f2fd; border-radius: 5px; font-size: 0.9rem; color: #0d47a1; }
     </style>
 
     <script>
-        window.requestIdleCallback = window.requestIdleCallback || function(cb) {
-            var start = Date.now();
-            return setTimeout(function() { cb({ didTimeout: false, timeRemaining: function() { return Math.max(0, 50 - (Date.now() - start)); } }); }, 1);
-        };
+        window.requestIdleCallback = window.requestIdleCallback || function(cb) { var start = Date.now(); return setTimeout(function() { cb({ didTimeout: false, timeRemaining: function() { return Math.max(0, 50 - (Date.now() - start)); } }); }, 1); };
         window.cancelIdleCallback = window.cancelIdleCallback || function(id) { clearTimeout(id); };
     </script>
 </head>
 <body>
 
     <div id="sidebar">
-        <h2>Panel de Control</h2>
+        <h2 style="color: #2c3e50; font-size: 1.2rem;">Panel de Control</h2>
 
         <div class="control-group">
             <label>🌊 Seleccionar Cuenca:</label>
             <select id="selectorCuenca" onchange="actualizarMapaCuencas()">
-                <option value="todas">-- Ver Todas --</option>
+                <option value="todas">-- Ver Todas (Mapa Gris) --</option>
             </select>
         </div>
 
@@ -54,7 +42,7 @@
         </div>
         
         <div class="control-group">
-             <label>💧 Unidad Hidrográfica:</label>
+             <label>💧 Unidad Hidrográfica (Puntos):</label>
             <select id="filtroCuenca" onchange="pintarPuntos()">
                 <option value="todos">Todas</option>
             </select>
@@ -75,16 +63,15 @@
 
     <script>
         // --- 1. CONFIGURACIÓN ---
-        
-        // PEGA AQUÍ TU ENLACE CSV
         const urlCSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZoRkV36w1tJ_wWvgMIuUda7PHYPLYGo3eRFkbym7UdARNyL8nw4JIphGplupwiipyxBFvLlpU6Mtb/pub?gid=0&single=true&output=csv"; 
-        
         const archivoGeoJSON = "cuencas.geojson"; 
 
-        // Variables Globales
-        var columnaNombreDetectada = null; 
-        var datosGeoJSON_Cache = null; // Guardaremos los datos crudos aquí
+        // ¡ATENCIÓN! Cambia esto si el filtro falla. 
+        // Intenta con: "NOMBRE", "Name", "NOMB_UH_N6", "NOMB_UH_N7"
+        var COLUMNA_NOMBRE_EXACTA = "NOMBRE"; 
 
+        // Variables Globales
+        var datosGeoJSON_Cache = null; 
         var map = L.map('map').setView([-9.5, -77.5], 7);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
 
@@ -95,84 +82,53 @@
         proj4.defs("EPSG:32717","+proj=utm +zone=17 +south +datum=WGS84 +units=m +no_defs");
 
         // --- CARGAR DATOS ---
-
-        // 1. Cargar GeoJSON (MODO ROBUSTO + VISUALIZACIÓN EXCLUSIVA)
         fetch(archivoGeoJSON)
-            .then(res => {
-                if (!res.ok) throw new Error("Error HTTP al cargar GeoJSON: " + res.status);
-                return res.json();
-            })
+            .then(res => res.json())
             .then(data => {
-                // 1. Guardar copia de seguridad de los datos crudos
                 datosGeoJSON_Cache = data; 
                 
-                // 2. DETECTIVE DE COLUMNAS (Miramos el archivo crudo, no el mapa)
-                let propiedadesEncontradas = null;
+                // Verificamos si la columna existe
+                let primerFeature = data.features ? data.features[0] : (data.properties ? {properties: data.properties} : null);
                 
-                // Verificamos si es una colección de features
-                if (data.features && data.features.length > 0) {
-                     propiedadesEncontradas = data.features[0].properties;
-                } else if (data.properties) {
-                    // Caso raro: es una sola feature suelta
-                    propiedadesEncontradas = data.properties;
-                    // Lo convertimos a array para que el resto del código funcione
-                    datosGeoJSON_Cache = { features: [data], type: "FeatureCollection" };
-                }
-
-                if (propiedadesEncontradas) {
-                    let llaves = Object.keys(propiedadesEncontradas);
+                if (primerFeature && primerFeature.properties) {
+                    let llaves = Object.keys(primerFeature.properties);
+                    // Si la columna configurada NO existe, intentamos adivinar otra mejor
+                    if (!primerFeature.properties[COLUMNA_NOMBRE_EXACTA]) {
+                        alert("AVISO: No encontré la columna '" + COLUMNA_NOMBRE_EXACTA + "'.\nLas disponibles son: " + llaves.join(", "));
+                        // Fallback de emergencia: usar la primera columna disponible
+                        COLUMNA_NOMBRE_EXACTA = llaves[0];
+                    }
                     
-                    // Buscar columna de nombre automáticamente
-                    columnaNombreDetectada = llaves.find(k => k.toLowerCase().includes("nom") || k.toLowerCase().includes("name") || k.toLowerCase().includes("uh"));
-                    
-                    if (!columnaNombreDetectada) columnaNombreDetectada = llaves[0]; // Plan Z
-                    
-                    console.log("Columna detectada:", columnaNombreDetectada);
-                    
-                    // 3. Llenar el selector
                     llenarSelectorCuencas(datosGeoJSON_Cache);
-                    
-                    // 4. Dibujar mapa inicial (Todas)
-                    actualizarMapaCuencas();
-
-                } else {
-                    console.warn("El GeoJSON cargó pero no tiene propiedades/columnas legibles.");
-                    alert("Alerta: Tu mapa se cargó pero no tiene datos (nombres) asociados.");
+                    actualizarMapaCuencas(); // Dibujar inicial
                 }
             })
-            .catch(err => {
-                console.error("Error Grave GeoJSON:", err);
-                alert("Error cargando el mapa de cuencas. Revisa la consola.");
-            });
+            .catch(err => { console.error(err); alert("Error cargando cuencas."); });
 
-        // 2. Cargar CSV
         Papa.parse(urlCSV, {
             download: true, header: true, skipEmptyLines: true,
             complete: function(results) {
                 datosPuntos = results.data;
                 llenarSelectoresPuntos();
                 pintarPuntos();
-            },
-            error: function(err) { console.error("Error CSV:", err); }
+            }
         });
 
-        // --- FUNCIONES LÓGICAS NUEVAS ---
-
+        // --- FUNCIONES ---
         function llenarSelectorCuencas(data) {
             let sel = document.getElementById('selectorCuenca');
             let nombres = new Set(); 
 
-            // Extraemos nombres directamente del JSON crudo
-            data.features.forEach(f => {
-                if (f.properties && columnaNombreDetectada) {
-                    let n = f.properties[columnaNombreDetectada];
+            let features = data.features || (data.properties ? [{properties: data.properties}] : []);
+
+            features.forEach(f => {
+                if (f.properties) {
+                    let n = f.properties[COLUMNA_NOMBRE_EXACTA];
                     if (n) nombres.add(n);
                 }
             });
 
-            let listaOrdenada = Array.from(nombres).sort();
-            
-            listaOrdenada.forEach(n => {
+            Array.from(nombres).sort().forEach(n => {
                 let opt = document.createElement('option');
                 opt.value = n;
                 opt.innerText = n;
@@ -180,76 +136,63 @@
             });
         }
 
-        // FUNCIÓN DE FILTRO EXCLUSIVO (BORRA Y DIBUJA)
         function actualizarMapaCuencas() {
             let seleccion = document.getElementById('selectorCuenca').value;
-            
-            // 1. Borramos todo el mapa de cuencas actual
-            layerCuencas.clearLayers();
+            layerCuencas.clearLayers(); // Limpiar todo
 
             if (!datosGeoJSON_Cache) return;
 
-            let datosA_Mostrar = null;
+            let features = datosGeoJSON_Cache.features || [datosGeoJSON_Cache];
+            let datosFiltrados = null;
 
-            // 2. Filtramos los datos crudos
             if (seleccion === "todas") {
-                datosA_Mostrar = datosGeoJSON_Cache;
-            } else {
-                // Crear un mini-geojson solo con la cuenca elegida
-                let featuresFiltrados = datosGeoJSON_Cache.features.filter(f => 
-                    f.properties[columnaNombreDetectada] == seleccion
-                );
-                datosA_Mostrar = {
-                    type: "FeatureCollection",
-                    features: featuresFiltrados
-                };
-            }
-
-            // 3. Dibujamos solo lo necesario
-            layerCuencas.addData(datosA_Mostrar);
-
-            // 4. Aplicamos Estilos
-            if (seleccion === "todas") {
-                layerCuencas.setStyle({ color: "#555", weight: 1, fillOpacity: 0.1, fillColor: "blue" });
-                document.getElementById('datosCuenca').innerHTML = "Visualizando todas las cuencas.";
-            } else {
-                // Estilo destacado
-                layerCuencas.setStyle({ color: "#d32f2f", weight: 3, fillOpacity: 0.4, fillColor: "#ffCDD2" });
+                // MOSTRAR TODO (Estilo Gris)
+                datosFiltrados = features;
+                document.getElementById('datosCuenca').innerHTML = "Viendo todas las cuencas.";
                 
-                // Zoom
+                layerCuencas = L.geoJSON({type:"FeatureCollection", features: datosFiltrados}, {
+                    style: { color: "#555", weight: 1, fillOpacity: 0.1, fillColor: "#3388ff" },
+                    onEachFeature: onEachFeatureLogic
+                }).addTo(map);
+
+            } else {
+                // FILTRO EXCLUSIVO (Estilo Rojo)
+                // Usamos trim() para evitar errores de espacios vacíos
+                datosFiltrados = features.filter(f => 
+                    f.properties[COLUMNA_NOMBRE_EXACTA] && 
+                    f.properties[COLUMNA_NOMBRE_EXACTA].toString().trim() === seleccion.trim()
+                );
+
+                layerCuencas = L.geoJSON({type:"FeatureCollection", features: datosFiltrados}, {
+                    style: { color: "#d32f2f", weight: 3, fillOpacity: 0.4, fillColor: "#ffCDD2" },
+                    onEachFeature: onEachFeatureLogic
+                }).addTo(map);
+                
                 if (layerCuencas.getBounds().isValid()) {
                     map.fitBounds(layerCuencas.getBounds());
                 }
                 
-                // Mostrar Info
-                if(datosA_Mostrar.features.length > 0) {
-                    mostrarInfoPanel(datosA_Mostrar.features[0]);
-                }
+                if(datosFiltrados.length > 0) mostrarInfoPanel(datosFiltrados[0]);
             }
+        }
 
-            // 5. Reactivar Popups
-            layerCuencas.eachLayer(layer => {
-                if (layer.feature && layer.feature.properties) {
-                    let n = layer.feature.properties[columnaNombreDetectada] || "Sin Nombre";
-                    layer.bindPopup(`<b>${n}</b>`);
-                }
-            });
+        function onEachFeatureLogic(feature, layer) {
+            if (feature.properties) {
+                let n = feature.properties[COLUMNA_NOMBRE_EXACTA] || "Cuenca";
+                layer.bindPopup(`<b>${n}</b>`);
+            }
         }
         
         function mostrarInfoPanel(feature) {
-             if(feature && feature.properties) {
-                let nombre = feature.properties[columnaNombreDetectada];
-                let infoHtml = `<b>${nombre}</b><hr>`;
-                for (const [key, value] of Object.entries(feature.properties)) {
-                    if(key !== "geometry") { 
-                        infoHtml += `<div style="font-size:11px;"><b>${key}:</b> ${value}</div>`;
-                    }
-                }
-                document.getElementById('datosCuenca').innerHTML = infoHtml;
+             let nombre = feature.properties[COLUMNA_NOMBRE_EXACTA];
+             let infoHtml = `<b>${nombre}</b><hr>`;
+             for (const [key, value] of Object.entries(feature.properties)) {
+                 if(key !== "geometry") infoHtml += `<div style="font-size:11px;"><b>${key}:</b> ${value}</div>`;
              }
+             document.getElementById('datosCuenca').innerHTML = infoHtml;
         }
 
-        // --- FUNCIONES PUNTOS (Igual que antes) ---
+        // --- PUNTOS (Sin cambios) ---
         function convertirCoord(este, norte) {
             if (!este || !norte) return null;
             let e = parseFloat(este.toString().replace(',', '.'));
@@ -275,8 +218,7 @@
                 if (latlng) {
                     contador++;
                     let marker = L.circleMarker(latlng, { radius: 6, color: 'white', fillColor: '#e65100', fillOpacity: 0.9, weight: 1 });
-                    let contenido = `<b>${d.CODIGO_FI}</b><br>${d.DESCRIPCION}<br><hr style="margin:5px 0;">As (2023): ${d.As_ppm_2023i || '-'}`;
-                    marker.bindPopup(contenido);
+                    marker.bindPopup(`<b>${d.CODIGO_FI}</b><br>${d.DESCRIPCION}<br>As: ${d.As_ppm_2023i || '-'}`);
                     layerPuntos.addLayer(marker);
                 }
             });
@@ -298,4 +240,3 @@
     </script>
 </body>
 </html>
-

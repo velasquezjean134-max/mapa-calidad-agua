@@ -75,11 +75,16 @@
 
     <script>
         // --- 1. CONFIGURACIÓN ---
-        const urlCSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZoRkV36w1tJ_wWvgMIuUda7PHYPLYGo3eRFkbym7UdARNyL8nw4JIphGplupwiipyxBFvLlpU6Mtb/pub?gid=0&single=true&output=csv"; 
+        
+        // Enlace a tu CSV de PUNTOS (Monitoreo)
+        const urlPuntosCSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZoRkV36w1tJ_wWvgMIuUda7PHYPLYGo3eRFkbym7UdARNyL8nw4JIphGplupwiipyxBFvLlpU6Mtb/pub?gid=0&single=true&output=csv"; // Tu Google Sheet de siempre
+        
+        // Enlace a tu CSV de CUENCAS (Datos: Nombres, Áreas)
+        // OPCIÓN A: Sube Ecs.csv a GitHub y pon "Ecs.csv" aquí.
+        // OPCIÓN B: Publícalo en Google Sheets y pon el enlace largo aquí.
+        const urlCuencasCSV = "Ecs.csv"; 
+        
         const archivoGeoJSON = "cuencas.geojson"; 
-
-        // Variable global para guardar el nombre de la columna detectada
-        var columnaNombreDetectada = null; 
 
         var map = L.map('map').setView([-9.5, -77.5], 7);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
@@ -87,61 +92,93 @@
         var layerCuencas = L.geoJSON(null).addTo(map);
         var layerPuntos = L.layerGroup().addTo(map);
         var datosPuntos = [];
+        var datosCuencasCSV = []; // Aquí guardaremos los datos del Excel Ecs.csv
 
         proj4.defs("EPSG:32717","+proj=utm +zone=17 +south +datum=WGS84 +units=m +no_defs");
 
         // --- CARGAR DATOS ---
 
-        // 1. Cargar GeoJSON
-        fetch(archivoGeoJSON)
-            .then(res => res.json())
-            .then(data => {
-                layerCuencas.clearLayers();
+        // 1. Primero cargamos el CSV de DATOS de Cuencas (Ecs.csv)
+        Papa.parse(urlCuencasCSV, {
+            download: true, header: true, skipEmptyLines: true,
+            complete: function(results) {
+                datosCuencasCSV = results.data;
+                console.log("Datos Cuencas CSV cargados:", datosCuencasCSV.length);
                 
-                // --- MODO DETECTIVE: Adivinar la columna de nombre ---
-                if (data.features.length > 0) {
-                    let props = data.features[0].properties;
-                    let llaves = Object.keys(props);
-                    
-                    // 1. Mostrar alerta al usuario para que sepa qué columnas hay
-                    alert("DETECTIVE: Las columnas encontradas en tu GeoJSON son:\n" + llaves.join(", "));
+                // 2. Una vez tenemos los datos, cargamos el MAPA (GeoJSON)
+                cargarMapaGeoJSON();
+            },
+            error: function(err) {
+                console.error("Error cargando CSV de Cuencas:", err);
+                alert("No se pudo cargar Ecs.csv. Asegúrate de subirlo a GitHub.");
+                // Intentamos cargar el mapa igual, aunque sea sin nombres
+                cargarMapaGeoJSON();
+            }
+        });
 
-                    // 2. Buscar automáticamente una columna que parezca un nombre
-                    // Busca algo que contenga "nom" o "name" (insensible a mayúsculas)
-                    columnaNombreDetectada = llaves.find(k => k.toLowerCase().includes("nom") || k.toLowerCase().includes("name") || k.toLowerCase().includes("uh"));
-                    
-                    // 3. Si falla, usa la primera columna que sea texto
-                    if (!columnaNombreDetectada) {
-                         columnaNombreDetectada = llaves[0]; // Plan C: Usar la primera columna
-                    }
-                    console.log("Usando columna de nombre:", columnaNombreDetectada);
-                }
+        function cargarMapaGeoJSON() {
+            fetch(archivoGeoJSON)
+                .then(res => res.json())
+                .then(data => {
+                    layerCuencas.clearLayers();
 
-                // Cargar datos al mapa
-                layerCuencas.addData(data);
-                layerCuencas.setStyle({ color: "#555", weight: 1, fillOpacity: 0.1 });
-                
-                // Llenar selector usando la columna detectada
-                llenarSelectorCuencas();
-                
-                // Popups dinámicos
-                layerCuencas.eachLayer(layer => {
-                    if (layer.feature && layer.feature.properties) {
-                        let nombre = layer.feature.properties[columnaNombreDetectada] || "Sin Nombre";
-                        layer.bindPopup(`<b>${nombre}</b>`);
+                    // FUSIÓN: Unir Dibujos (GeoJSON) + Datos (CSV)
+                    // Asumimos que el orden es el mismo (Fila 1 = Dibujo 1)
+                    
+                    let geometrias = data.geometries || data.features; // Detectar si es GeometryCollection o FeatureCollection
+                    
+                    if (!geometrias && data.type === 'GeometryCollection') {
+                        geometrias = data.geometries;
                     }
+
+                    if (geometrias) {
+                        // Convertimos todo a un formato estándar con propiedades
+                        let featuresFusionados = geometrias.map((geo, index) => {
+                            // Extraer la geometría real
+                            let geometriaReal = geo.geometry || geo; 
+                            
+                            // Buscar los datos correspondientes en el CSV (por índice fila)
+                            let datosFila = datosCuencasCSV[index] || { NOMBRE: "Cuenca " + (index+1) };
+                            
+                            return {
+                                "type": "Feature",
+                                "geometry": geometriaReal,
+                                "properties": datosFila // ¡Aquí ocurre la magia! Inyectamos los datos
+                            };
+                        });
+
+                        // Crear el mapa con los datos fusionados
+                        layerCuencas.addData({ "type": "FeatureCollection", "features": featuresFusionados });
+                        
+                        // Estilos y Popups
+                        layerCuencas.setStyle({ color: "#555", weight: 1, fillOpacity: 0.1 });
+                        
+                        layerCuencas.eachLayer(layer => {
+                            let p = layer.feature.properties;
+                            // Usamos las columnas de tu CSV Ecs.csv
+                            let nombre = p.NOMBRE || "Sin Nombre";
+                            let area = parseFloat(p.AREA_KM2).toFixed(2) || "0";
+                            layer.bindPopup(`<b>${nombre}</b><br>Área: ${area} km²`);
+                        });
+
+                        llenarSelectorCuencas();
+                    }
+                })
+                .catch(err => {
+                    console.error("Error GeoJSON:", err);
+                    alert("Error cargando el archivo del mapa.");
                 });
-            })
-            .catch(err => console.error("Error GeoJSON:", err));
+        }
 
-        // 2. Cargar CSV
-        Papa.parse(urlCSV, {
+        // 3. Cargar CSV de Puntos (Monitoreo)
+        Papa.parse(urlPuntosCSV, {
             download: true, header: true, skipEmptyLines: true,
             complete: function(results) {
                 datosPuntos = results.data;
                 llenarSelectoresPuntos();
                 pintarPuntos();
-            }
+            },
+            error: function(err) { console.error("Error CSV Puntos:", err); }
         });
 
         // --- FUNCIONES LÓGICAS ---
@@ -151,14 +188,13 @@
             let nombres = new Set(); 
 
             layerCuencas.eachLayer(function(layer) {
-                if (layer.feature && layer.feature.properties && columnaNombreDetectada) {
-                    let nombre = layer.feature.properties[columnaNombreDetectada];
+                if (layer.feature && layer.feature.properties) {
+                    let nombre = layer.feature.properties.NOMBRE;
                     if (nombre) nombres.add(nombre);
                 }
             });
 
             let listaOrdenada = Array.from(nombres).sort();
-            
             listaOrdenada.forEach(n => {
                 let opt = document.createElement('option');
                 opt.value = n;
@@ -171,29 +207,25 @@
             let seleccion = document.getElementById('selectorCuenca').value;
             
             layerCuencas.eachLayer(layer => {
-                if (!layer.feature || !layer.feature.properties) return;
+                let props = layer.feature.properties;
+                let nombreLayer = props.NOMBRE || "";
                 
-                let nombreLayer = layer.feature.properties[columnaNombreDetectada] || "";
-                
-                // Reset
                 layer.setStyle({ color: "#555", weight: 1, fillOpacity: 0.1, fillColor: "blue" });
                 
-                if (seleccion == nombreLayer) { // Usamos == por si hay diferencias de tipo número/texto
+                if (seleccion === nombreLayer) { 
                     layer.setStyle({ color: "#d32f2f", weight: 3, fillOpacity: 0.4, fillColor: "#ffCDD2" });
                     layer.openPopup();
                     map.fitBounds(layer.getBounds());
                     
-                    // Mostrar todas las propiedades en el panel para debug
-                    let infoHtml = `<b>${nombreLayer}</b><hr>`;
-                    for (const [key, value] of Object.entries(layer.feature.properties)) {
-                        infoHtml += `<div style="font-size:11px;"><b>${key}:</b> ${value}</div>`;
-                    }
-                    document.getElementById('datosCuenca').innerHTML = infoHtml;
+                    let area = parseFloat(props.AREA_KM2).toFixed(2);
+                    document.getElementById('datosCuenca').innerHTML = 
+                        `<b>${nombreLayer}</b><br>
+                         Área: ${area} km²<br>
+                         Cód: ${props.CODIGO || '-'}`;
                 }
             });
         }
 
-        // --- FUNCIONES PUNTOS ---
         function convertirCoord(este, norte) {
             if (!este || !norte) return null;
             let e = parseFloat(este.toString().replace(',', '.'));

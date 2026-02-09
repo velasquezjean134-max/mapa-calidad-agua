@@ -26,13 +26,9 @@
         select { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
         
         .info-box { margin-top: auto; padding: 10px; background: #e3f2fd; border-radius: 5px; font-size: 0.9rem; color: #0d47a1; }
-        
-        /* Estilo Popup */
-        .custom-popup .leaflet-popup-content-wrapper { border-radius: 4px; }
     </style>
 
     <script>
-        // Esto arregla el error "Can't find variable: requestIdleCallback" en Safari antiguo
         window.requestIdleCallback = window.requestIdleCallback || function(cb) {
             var start = Date.now();
             return setTimeout(function() {
@@ -44,9 +40,7 @@
                 });
             }, 1);
         };
-        window.cancelIdleCallback = window.cancelIdleCallback || function(id) {
-            clearTimeout(id);
-        };
+        window.cancelIdleCallback = window.cancelIdleCallback || function(id) { clearTimeout(id); };
     </script>
 </head>
 <body>
@@ -89,12 +83,11 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
 
     <script>
-        // --- 1. TUS ARCHIVOS (CONFIGURACIÓN) ---
+        // --- 1. CONFIGURACIÓN ---
         
-        // PEGA AQUÍ TU ENLACE CSV DE GOOGLE SHEETS
+        // PEGA AQUÍ TU ENLACE CSV
         const urlCSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZoRkV36w1tJ_wWvgMIuUda7PHYPLYGo3eRFkbym7UdARNyL8nw4JIphGplupwiipyxBFvLlpU6Mtb/pub?gid=0&single=true&output=csv"; 
         
-        // El nombre EXACTO de tu archivo en GitHub
         const archivoGeoJSON = "cuencas.geojson"; 
 
         // Configuración del Mapa
@@ -107,12 +100,11 @@
         var datosGeoJSON = null;
         var datosPuntos = [];
 
-        // Definir proyección UTM 17S (Perú)
         proj4.defs("EPSG:32717","+proj=utm +zone=17 +south +datum=WGS84 +units=m +no_defs");
 
         // --- CARGAR DATOS ---
 
-        // 1. Cargar Mapa de Cuencas (GeoJSON)
+        // 1. Cargar GeoJSON (CON PROTECCIÓN CONTRA ERRORES)
         fetch(archivoGeoJSON)
             .then(res => {
                 if (!res.ok) throw new Error("Error cargando GeoJSON");
@@ -121,29 +113,35 @@
             .then(data => {
                 datosGeoJSON = data;
                 
-                // Configurar estilo base
                 layerCuencas = L.geoJSON(data, {
                     style: { color: "#555", weight: 1, fillOpacity: 0.1 },
                     onEachFeature: function(feature, layer) {
-                        // Intentamos obtener el nombre de varias formas posibles
-                        let props = feature.properties;
-                        let nombre = props.NOMBRE || props.Name || props.NOMB_UH_N1 || "Cuenca";
-                        let area = props.AREA_KM2 || 0;
-                        
-                        layer.bindPopup(`<b>${nombre}</b><br>Área: ${area} km²`);
+                        // --- AQUÍ ESTÁ EL ARREGLO ---
+                        // Preguntamos: ¿Existe "properties"? Si no, pon valores por defecto.
+                        if (feature && feature.properties) {
+                            let props = feature.properties;
+                            // Buscamos el nombre en varias columnas posibles
+                            let nombre = props.NOMBRE || props.Name || props.NOMB_UH_N1 || "Cuenca s/n";
+                            let area = props.AREA_KM2 || 0;
+                            
+                            layer.bindPopup(`<b>${nombre}</b><br>Área: ${area} km²`);
+                        }
                     }
                 }).addTo(map);
                 
                 llenarSelectorCuencas();
             })
-            .catch(err => console.error("Error GeoJSON:", err));
+            .catch(err => {
+                console.error("Error GeoJSON:", err);
+                alert("Alerta: Hubo un problema leyendo el archivo de cuencas. Revisa la consola.");
+            });
 
-        // 2. Cargar Puntos (CSV Google Sheets)
+        // 2. Cargar Puntos
         Papa.parse(urlCSV, {
             download: true, header: true, skipEmptyLines: true,
             complete: function(results) {
                 datosPuntos = results.data;
-                llenarSelectoresPuntos(); // Llenar filtros
+                llenarSelectoresPuntos();
                 pintarPuntos();
             },
             error: function(err) { console.error("Error CSV:", err); }
@@ -155,19 +153,19 @@
             let seleccion = document.getElementById('selectorCuenca').value;
             
             layerCuencas.eachLayer(layer => {
+                // Validación de seguridad extra
+                if (!layer.feature || !layer.feature.properties) return;
+
                 let props = layer.feature.properties;
-                let nombreLayer = props.NOMBRE || props.Name || "";
+                let nombreLayer = props.NOMBRE || props.Name || props.NOMB_UH_N1 || "Cuenca s/n";
                 
-                // Restaurar estilo original
                 layer.setStyle({ color: "#555", weight: 1, fillOpacity: 0.1, fillColor: "blue" });
                 
                 if (seleccion === nombreLayer) {
-                    // Resaltar selección
                     layer.setStyle({ color: "#d32f2f", weight: 3, fillOpacity: 0.4, fillColor: "#ffCDD2" });
                     layer.openPopup();
                     map.fitBounds(layer.getBounds());
                     
-                    // Mostrar datos en el panel
                     document.getElementById('datosCuenca').innerHTML = 
                         `<b>${nombreLayer}</b><br>
                          Área: ${props.AREA_KM2 || '-'} km²<br>
@@ -182,10 +180,13 @@
             
             let nombres = [];
             datosGeoJSON.features.forEach(f => {
-                let n = f.properties.NOMBRE || f.properties.Name;
-                if(n) nombres.push(n);
+                // Validación de seguridad extra
+                if (f.properties) {
+                    let n = f.properties.NOMBRE || f.properties.Name || f.properties.NOMB_UH_N1;
+                    if(n) nombres.push(n);
+                }
             });
-            nombres.sort(); // Ordenar A-Z
+            nombres.sort();
             
             nombres.forEach(n => {
                 let opt = document.createElement('option');
@@ -213,12 +214,10 @@
             let contador = 0;
             
             datosPuntos.forEach(d => {
-                // Filtros
                 if (filtroTipo !== 'todos' && d.TIPO_RH !== filtroTipo) return;
                 if (filtroCuenca !== 'todos' && d.UNIDAD_HID !== filtroCuenca) return;
                 
                 let latlng = convertirCoord(d.ESTE, d.NORTE);
-                
                 if (latlng) {
                     contador++;
                     let marker = L.circleMarker(latlng, { radius: 6, color: 'white', fillColor: '#e65100', fillOpacity: 0.9, weight: 1 });
@@ -227,19 +226,16 @@
                                      ${d.DESCRIPCION}<br>
                                      <hr style="margin:5px 0;">
                                      As (2023): ${d.As_ppm_2023i || '-'}`;
-                                     
                     marker.bindPopup(contenido);
                     layerPuntos.addLayer(marker);
                 }
             });
-            
             document.getElementById('contadorPuntos').innerText = contador;
         }
 
         function llenarSelectoresPuntos() {
             let selTipo = document.getElementById('filtroTipo');
             let selCuenca = document.getElementById('filtroCuenca');
-            
             let tipos = new Set();
             let cuencas = new Set();
             
@@ -248,14 +244,11 @@
                 if(d.UNIDAD_HID) cuencas.add(d.UNIDAD_HID);
             });
             
-            // Llenar Tipo
             tipos.forEach(t => {
                 let opt = document.createElement('option');
                 opt.value = t; opt.innerText = t;
                 selTipo.appendChild(opt);
             });
-
-            // Llenar Cuenca (Unidad Hidrográfica)
             cuencas.forEach(c => {
                 let opt = document.createElement('option');
                 opt.value = c; opt.innerText = c;

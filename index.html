@@ -10,14 +10,12 @@
     <style>
         body { margin: 0; padding: 0; font-family: 'Segoe UI', Helvetica, Arial, sans-serif; display: flex; height: 100vh; }
         
-        /* Panel Lateral */
         #sidebar {
             width: 320px; background-color: #f8f9fa; border-right: 1px solid #ddd;
             display: flex; flex-direction: column; padding: 20px; box-shadow: 2px 0 5px rgba(0,0,0,0.1); z-index: 1000;
             overflow-y: auto;
         }
 
-        /* Mapa */
         #map { flex-grow: 1; height: 100%; }
 
         h2 { margin-top: 0; color: #2c3e50; font-size: 1.2rem; }
@@ -31,14 +29,7 @@
     <script>
         window.requestIdleCallback = window.requestIdleCallback || function(cb) {
             var start = Date.now();
-            return setTimeout(function() {
-                cb({
-                    didTimeout: false,
-                    timeRemaining: function() {
-                        return Math.max(0, 50 - (Date.now() - start));
-                    }
-                });
-            }, 1);
+            return setTimeout(function() { cb({ didTimeout: false, timeRemaining: function() { return Math.max(0, 50 - (Date.now() - start)); } }); }, 1);
         };
         window.cancelIdleCallback = window.cancelIdleCallback || function(id) { clearTimeout(id); };
     </script>
@@ -49,16 +40,16 @@
         <h2>Panel de Control</h2>
 
         <div class="control-group">
-            <label>🌊 Seleccionar Cuenca (Zona):</label>
+            <label>🌊 Seleccionar Cuenca:</label>
             <select id="selectorCuenca" onchange="resaltarCuenca()">
                 <option value="">-- Ver Todo --</option>
             </select>
         </div>
 
         <div class="control-group">
-            <label>📍 Filtrar Puntos de Monitoreo:</label>
+            <label>📍 Filtrar Puntos:</label>
             <select id="filtroTipo" onchange="pintarPuntos()">
-                <option value="todos">Cargando puntos...</option>
+                <option value="todos">Cargando...</option>
             </select>
         </div>
         
@@ -72,7 +63,7 @@
         <div class="info-box">
             <div id="datosCuenca">Selecciona una cuenca para ver sus detalles.</div>
             <br>
-            <small>Total puntos visibles: <span id="contadorPuntos">0</span></small>
+            <small>Puntos visibles: <span id="contadorPuntos">0</span></small>
         </div>
     </div>
 
@@ -84,10 +75,7 @@
 
     <script>
         // --- 1. CONFIGURACIÓN ---
-        
-        // PEGA AQUÍ TU ENLACE CSV
         const urlCSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZoRkV36w1tJ_wWvgMIuUda7PHYPLYGo3eRFkbym7UdARNyL8nw4JIphGplupwiipyxBFvLlpU6Mtb/pub?gid=0&single=true&output=csv"; 
-        
         const archivoGeoJSON = "cuencas.geojson"; 
 
         // Configuración del Mapa
@@ -96,69 +84,98 @@
 
         var layerCuencas = L.geoJSON(null).addTo(map);
         var layerPuntos = L.layerGroup().addTo(map);
-        
-        var datosGeoJSON = null;
         var datosPuntos = [];
 
         proj4.defs("EPSG:32717","+proj=utm +zone=17 +south +datum=WGS84 +units=m +no_defs");
 
         // --- CARGAR DATOS ---
 
-        // 1. Cargar GeoJSON (CON PROTECCIÓN CONTRA ERRORES)
+        // 1. Cargar GeoJSON
         fetch(archivoGeoJSON)
             .then(res => {
-                if (!res.ok) throw new Error("Error cargando GeoJSON");
+                if (!res.ok) throw new Error("No se encontró el archivo GeoJSON");
                 return res.json();
             })
             .then(data => {
-                datosGeoJSON = data;
+                // Limpiamos capa anterior
+                layerCuencas.clearLayers();
                 
-                layerCuencas = L.geoJSON(data, {
-                    style: { color: "#555", weight: 1, fillOpacity: 0.1 },
-                    onEachFeature: function(feature, layer) {
-                        // --- AQUÍ ESTÁ EL ARREGLO ---
-                        // Preguntamos: ¿Existe "properties"? Si no, pon valores por defecto.
-                        if (feature && feature.properties) {
-                            let props = feature.properties;
-                            // Buscamos el nombre en varias columnas posibles
-                            let nombre = props.NOMBRE || props.Name || props.NOMB_UH_N1 || "Cuenca s/n";
-                            let area = props.AREA_KM2 || 0;
-                            
-                            layer.bindPopup(`<b>${nombre}</b><br>Área: ${area} km²`);
-                        }
-                    }
-                }).addTo(map);
+                // Cargamos los datos en Leaflet
+                layerCuencas.addData(data);
                 
+                // Aplicamos estilos básicos
+                layerCuencas.setStyle({ color: "#555", weight: 1, fillOpacity: 0.1 });
+                
+                // Llenamos el selector usando lo que Leaflet ya procesó (Más seguro)
                 llenarSelectorCuencas();
+                
+                // Añadimos popups
+                layerCuencas.eachLayer(layer => {
+                    if (layer.feature && layer.feature.properties) {
+                        let p = layer.feature.properties;
+                        let n = p.NOMBRE || p.Name || p.NOMB_UH_N1 || "Cuenca";
+                        layer.bindPopup(`<b>${n}</b>`);
+                    }
+                });
             })
             .catch(err => {
                 console.error("Error GeoJSON:", err);
-                alert("Alerta: Hubo un problema leyendo el archivo de cuencas. Revisa la consola.");
             });
 
-        // 2. Cargar Puntos
+        // 2. Cargar CSV
         Papa.parse(urlCSV, {
             download: true, header: true, skipEmptyLines: true,
             complete: function(results) {
                 datosPuntos = results.data;
                 llenarSelectoresPuntos();
                 pintarPuntos();
-            },
-            error: function(err) { console.error("Error CSV:", err); }
+            }
         });
 
-        // --- FUNCIONES ---
+        // --- FUNCIONES LÓGICAS ---
+
+        function llenarSelectorCuencas() {
+            let sel = document.getElementById('selectorCuenca');
+            let nombres = new Set(); // Usamos un Set para evitar duplicados
+
+            // Iteramos sobre las capas que Leaflet YA dibujó (así evitamos errores de estructura)
+            layerCuencas.eachLayer(function(layer) {
+                if (layer.feature && layer.feature.properties) {
+                    let props = layer.feature.properties;
+                    // Busca el nombre en cualquier columna probable
+                    let nombre = props.NOMBRE || props.Name || props.NOMB_UH_N1 || props.NOMB_UH_N2;
+                    if (nombre) {
+                        nombres.add(nombre);
+                    }
+                }
+            });
+
+            // Convertimos a lista, ordenamos y llenamos el HTML
+            let listaOrdenada = Array.from(nombres).sort();
+            
+            if (listaOrdenada.length === 0) {
+                // Si no encontramos nombres, avisamos en la consola
+                console.warn("No se encontraron nombres de cuencas en el archivo.");
+            }
+
+            listaOrdenada.forEach(n => {
+                let opt = document.createElement('option');
+                opt.value = n;
+                opt.innerText = n;
+                sel.appendChild(opt);
+            });
+        }
 
         function resaltarCuenca() {
             let seleccion = document.getElementById('selectorCuenca').value;
             
             layerCuencas.eachLayer(layer => {
-                // Validación de seguridad extra
                 if (!layer.feature || !layer.feature.properties) return;
-
-                let props = layer.feature.properties;
-                let nombreLayer = props.NOMBRE || props.Name || props.NOMB_UH_N1 || "Cuenca s/n";
                 
+                let props = layer.feature.properties;
+                let nombreLayer = props.NOMBRE || props.Name || props.NOMB_UH_N1 || props.NOMB_UH_N2 || "";
+                
+                // Reset estilo
                 layer.setStyle({ color: "#555", weight: 1, fillOpacity: 0.1, fillColor: "blue" });
                 
                 if (seleccion === nombreLayer) {
@@ -169,33 +186,12 @@
                     document.getElementById('datosCuenca').innerHTML = 
                         `<b>${nombreLayer}</b><br>
                          Área: ${props.AREA_KM2 || '-'} km²<br>
-                         Cód: ${props.CODIGO || '-'}`;
+                         Código: ${props.CODIGO || '-'}`;
                 }
             });
         }
 
-        function llenarSelectorCuencas() {
-            let sel = document.getElementById('selectorCuenca');
-            if (!datosGeoJSON) return;
-            
-            let nombres = [];
-            datosGeoJSON.features.forEach(f => {
-                // Validación de seguridad extra
-                if (f.properties) {
-                    let n = f.properties.NOMBRE || f.properties.Name || f.properties.NOMB_UH_N1;
-                    if(n) nombres.push(n);
-                }
-            });
-            nombres.sort();
-            
-            nombres.forEach(n => {
-                let opt = document.createElement('option');
-                opt.value = n;
-                opt.innerText = n;
-                sel.appendChild(opt);
-            });
-        }
-
+        // --- FUNCIONES PUNTOS ---
         function convertirCoord(este, norte) {
             if (!este || !norte) return null;
             let e = parseFloat(este.toString().replace(',', '.'));
@@ -222,10 +218,8 @@
                     contador++;
                     let marker = L.circleMarker(latlng, { radius: 6, color: 'white', fillColor: '#e65100', fillOpacity: 0.9, weight: 1 });
                     
-                    let contenido = `<b>${d.CODIGO_FI}</b><br>
-                                     ${d.DESCRIPCION}<br>
-                                     <hr style="margin:5px 0;">
-                                     As (2023): ${d.As_ppm_2023i || '-'}`;
+                    // Contenido Popup
+                    let contenido = `<b>${d.CODIGO_FI}</b><br>${d.DESCRIPCION}<br><hr style="margin:5px 0;">As (2023): ${d.As_ppm_2023i || '-'}`;
                     marker.bindPopup(contenido);
                     layerPuntos.addLayer(marker);
                 }

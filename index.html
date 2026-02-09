@@ -78,7 +78,9 @@
         const urlCSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTZoRkV36w1tJ_wWvgMIuUda7PHYPLYGo3eRFkbym7UdARNyL8nw4JIphGplupwiipyxBFvLlpU6Mtb/pub?gid=0&single=true&output=csv"; 
         const archivoGeoJSON = "cuencas.geojson"; 
 
-        // Configuración del Mapa
+        // Variable global para guardar el nombre de la columna detectada
+        var columnaNombreDetectada = null; 
+
         var map = L.map('map').setView([-9.5, -77.5], 7);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap' }).addTo(map);
 
@@ -92,35 +94,45 @@
 
         // 1. Cargar GeoJSON
         fetch(archivoGeoJSON)
-            .then(res => {
-                if (!res.ok) throw new Error("No se encontró el archivo GeoJSON");
-                return res.json();
-            })
+            .then(res => res.json())
             .then(data => {
-                // Limpiamos capa anterior
                 layerCuencas.clearLayers();
                 
-                // Cargamos los datos en Leaflet
+                // --- MODO DETECTIVE: Adivinar la columna de nombre ---
+                if (data.features.length > 0) {
+                    let props = data.features[0].properties;
+                    let llaves = Object.keys(props);
+                    
+                    // 1. Mostrar alerta al usuario para que sepa qué columnas hay
+                    alert("DETECTIVE: Las columnas encontradas en tu GeoJSON son:\n" + llaves.join(", "));
+
+                    // 2. Buscar automáticamente una columna que parezca un nombre
+                    // Busca algo que contenga "nom" o "name" (insensible a mayúsculas)
+                    columnaNombreDetectada = llaves.find(k => k.toLowerCase().includes("nom") || k.toLowerCase().includes("name") || k.toLowerCase().includes("uh"));
+                    
+                    // 3. Si falla, usa la primera columna que sea texto
+                    if (!columnaNombreDetectada) {
+                         columnaNombreDetectada = llaves[0]; // Plan C: Usar la primera columna
+                    }
+                    console.log("Usando columna de nombre:", columnaNombreDetectada);
+                }
+
+                // Cargar datos al mapa
                 layerCuencas.addData(data);
-                
-                // Aplicamos estilos básicos
                 layerCuencas.setStyle({ color: "#555", weight: 1, fillOpacity: 0.1 });
                 
-                // Llenamos el selector usando lo que Leaflet ya procesó (Más seguro)
+                // Llenar selector usando la columna detectada
                 llenarSelectorCuencas();
                 
-                // Añadimos popups
+                // Popups dinámicos
                 layerCuencas.eachLayer(layer => {
                     if (layer.feature && layer.feature.properties) {
-                        let p = layer.feature.properties;
-                        let n = p.NOMBRE || p.Name || p.NOMB_UH_N1 || "Cuenca";
-                        layer.bindPopup(`<b>${n}</b>`);
+                        let nombre = layer.feature.properties[columnaNombreDetectada] || "Sin Nombre";
+                        layer.bindPopup(`<b>${nombre}</b>`);
                     }
                 });
             })
-            .catch(err => {
-                console.error("Error GeoJSON:", err);
-            });
+            .catch(err => console.error("Error GeoJSON:", err));
 
         // 2. Cargar CSV
         Papa.parse(urlCSV, {
@@ -136,28 +148,17 @@
 
         function llenarSelectorCuencas() {
             let sel = document.getElementById('selectorCuenca');
-            let nombres = new Set(); // Usamos un Set para evitar duplicados
+            let nombres = new Set(); 
 
-            // Iteramos sobre las capas que Leaflet YA dibujó (así evitamos errores de estructura)
             layerCuencas.eachLayer(function(layer) {
-                if (layer.feature && layer.feature.properties) {
-                    let props = layer.feature.properties;
-                    // Busca el nombre en cualquier columna probable
-                    let nombre = props.NOMBRE || props.Name || props.NOMB_UH_N1 || props.NOMB_UH_N2;
-                    if (nombre) {
-                        nombres.add(nombre);
-                    }
+                if (layer.feature && layer.feature.properties && columnaNombreDetectada) {
+                    let nombre = layer.feature.properties[columnaNombreDetectada];
+                    if (nombre) nombres.add(nombre);
                 }
             });
 
-            // Convertimos a lista, ordenamos y llenamos el HTML
             let listaOrdenada = Array.from(nombres).sort();
             
-            if (listaOrdenada.length === 0) {
-                // Si no encontramos nombres, avisamos en la consola
-                console.warn("No se encontraron nombres de cuencas en el archivo.");
-            }
-
             listaOrdenada.forEach(n => {
                 let opt = document.createElement('option');
                 opt.value = n;
@@ -172,21 +173,22 @@
             layerCuencas.eachLayer(layer => {
                 if (!layer.feature || !layer.feature.properties) return;
                 
-                let props = layer.feature.properties;
-                let nombreLayer = props.NOMBRE || props.Name || props.NOMB_UH_N1 || props.NOMB_UH_N2 || "";
+                let nombreLayer = layer.feature.properties[columnaNombreDetectada] || "";
                 
-                // Reset estilo
+                // Reset
                 layer.setStyle({ color: "#555", weight: 1, fillOpacity: 0.1, fillColor: "blue" });
                 
-                if (seleccion === nombreLayer) {
+                if (seleccion == nombreLayer) { // Usamos == por si hay diferencias de tipo número/texto
                     layer.setStyle({ color: "#d32f2f", weight: 3, fillOpacity: 0.4, fillColor: "#ffCDD2" });
                     layer.openPopup();
                     map.fitBounds(layer.getBounds());
                     
-                    document.getElementById('datosCuenca').innerHTML = 
-                        `<b>${nombreLayer}</b><br>
-                         Área: ${props.AREA_KM2 || '-'} km²<br>
-                         Código: ${props.CODIGO || '-'}`;
+                    // Mostrar todas las propiedades en el panel para debug
+                    let infoHtml = `<b>${nombreLayer}</b><hr>`;
+                    for (const [key, value] of Object.entries(layer.feature.properties)) {
+                        infoHtml += `<div style="font-size:11px;"><b>${key}:</b> ${value}</div>`;
+                    }
+                    document.getElementById('datosCuenca').innerHTML = infoHtml;
                 }
             });
         }
@@ -217,8 +219,6 @@
                 if (latlng) {
                     contador++;
                     let marker = L.circleMarker(latlng, { radius: 6, color: 'white', fillColor: '#e65100', fillOpacity: 0.9, weight: 1 });
-                    
-                    // Contenido Popup
                     let contenido = `<b>${d.CODIGO_FI}</b><br>${d.DESCRIPCION}<br><hr style="margin:5px 0;">As (2023): ${d.As_ppm_2023i || '-'}`;
                     marker.bindPopup(contenido);
                     layerPuntos.addLayer(marker);
@@ -232,22 +232,12 @@
             let selCuenca = document.getElementById('filtroCuenca');
             let tipos = new Set();
             let cuencas = new Set();
-            
             datosPuntos.forEach(d => {
                 if(d.TIPO_RH) tipos.add(d.TIPO_RH);
                 if(d.UNIDAD_HID) cuencas.add(d.UNIDAD_HID);
             });
-            
-            tipos.forEach(t => {
-                let opt = document.createElement('option');
-                opt.value = t; opt.innerText = t;
-                selTipo.appendChild(opt);
-            });
-            cuencas.forEach(c => {
-                let opt = document.createElement('option');
-                opt.value = c; opt.innerText = c;
-                selCuenca.appendChild(opt);
-            });
+            tipos.forEach(t => { let o=document.createElement('option'); o.value=t; o.innerText=t; selTipo.appendChild(o); });
+            cuencas.forEach(c => { let o=document.createElement('option'); o.value=c; o.innerText=c; selCuenca.appendChild(o); });
         }
     </script>
 </body>
